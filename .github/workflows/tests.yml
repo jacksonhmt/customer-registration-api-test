@@ -1,0 +1,180 @@
+name: API Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      backend_ref:
+        description: Backend commit SHA (or ref) to build and test
+        type: string
+        required: true
+    secrets:
+      backend_token:
+        description: Token with read access to the backend repository (only if it is private)
+        required: false
+      automation_token:
+        description: Token with read access to the automation repository (only if it is private)
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  BACKEND_REPOSITORY: jacksonhmt/customer-registration-api
+  # Called by the backend: always this repository's main. Direct run: the repository that holds the
+  # revision that triggered the workflow (the fork's repository on pull requests from forks).
+  AUTOMATION_REPOSITORY: ${{ inputs.backend_ref && 'jacksonhmt/customer-registration-api-test' || github.event.pull_request.head.repo.full_name || github.repository }}
+  # Called by the backend: exact revision received. Direct run: backend main.
+  BACKEND_REF: ${{ inputs.backend_ref || 'main' }}
+  # Called by the backend: automation main. Direct run: the revision that triggered the workflow.
+  # On pull requests this is the head commit of the source branch, not the merge commit.
+  AUTOMATION_REF: ${{ inputs.backend_ref && 'main' || github.event.pull_request.head.sha || github.sha }}
+  # Throwaway credentials for the temporary PostgreSQL started inside the runner. Not a real secret.
+  DB_NAME: loja
+  DB_USERNAME: postgres
+  DB_PASSWORD: ci-temporary-password
+  API_BASE_URL: http://localhost:8080
+
+jobs:
+  api-tests:
+    name: Smoke, Functional and Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: loja
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-temporary-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d loja"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BACKEND_REPOSITORY }}
+          ref: ${{ env.BACKEND_REF }}
+          path: backend
+          token: ${{ secrets.backend_token || github.token }}
+          persist-credentials: false
+
+      - name: Check out test automation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AUTOMATION_REPOSITORY }}
+          ref: ${{ env.AUTOMATION_REF }}
+          path: automation
+          token: ${{ secrets.automation_token || github.token }}
+          persist-credentials: false
+
+      - name: Set up Java 27
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '27'
+          cache: maven
+          cache-dependency-path: |
+            backend/pom.xml
+            automation/pom.xml
+
+      - name: Build backend
+        working-directory: backend
+        run: ./mvnw --batch-mode --no-transfer-progress -DskipTests package
+
+      - name: Start backend
+        working-directory: backend
+        env:
+          DB_URL: jdbc:postgresql://localhost:5432/${{ env.DB_NAME }}
+          SPRING_FLYWAY_ENABLED: 'true'
+        run: |
+          JAR=$(find target -maxdepth 1 -name '*.jar' | head -n 1)
+          nohup java -jar "$JAR" > "$RUNNER_TEMP/backend.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/backend.pid"
+
+      - name: Wait for API
+        run: |
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/backend.pid")" 2>/dev/null; then
+              echo "::error::Backend process exited before becoming ready"
+              cat "$RUNNER_TEMP/backend.log"
+              exit 1
+            fi
+            if curl -fsS -o /dev/null "$API_BASE_URL/api/v1/customers?size=1"; then
+              echo "API ready after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::API did not become ready in time"
+          cat "$RUNNER_TEMP/backend.log"
+          exit 1
+
+      - name: 1 - Smoke tests
+        working-directory: automation
+        run: >-
+          ./mvnw --batch-mode --no-transfer-progress test
+          -Dtest='br/com/loja/acceptance/smoke/**'
+          -Dsurefire.failIfNoSpecifiedTests=true
+          -Dreports.stage=smoke
+
+      - name: Upload smoke reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-1-smoke
+          path: automation/target/surefire-reports/smoke/
+          if-no-files-found: ignore
+
+      - name: 2 - Functional tests
+        working-directory: automation
+        run: >-
+          ./mvnw --batch-mode --no-transfer-progress test
+          -Dtest='br/com/loja/acceptance/functional/**'
+          -Dsurefire.failIfNoSpecifiedTests=true
+          -Dreports.stage=functional
+
+      - name: Upload functional reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-2-functional
+          path: automation/target/surefire-reports/functional/
+          if-no-files-found: ignore
+
+      - name: 3 - Contract tests
+        working-directory: automation
+        run: >-
+          ./mvnw --batch-mode --no-transfer-progress test
+          -Dtest='br/com/loja/acceptance/contract/**'
+          -Dsurefire.failIfNoSpecifiedTests=true
+          -Dreports.stage=contract
+
+      - name: Upload contract reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-3-contract
+          path: automation/target/surefire-reports/contract/
+          if-no-files-found: ignore
+
+      - name: Show backend log on failure
+        if: ${{ failure() }}
+        run: cat "$RUNNER_TEMP/backend.log" || true
+
+      - name: Stop backend
+        if: ${{ always() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/backend.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/backend.pid")" 2>/dev/null || true
+          fi

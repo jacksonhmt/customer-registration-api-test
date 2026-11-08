@@ -12,9 +12,13 @@ public final class CustomerFactory {
     }
 
     public static CustomerRequest validCustomer() {
+        return validCustomer(formattedCpf());
+    }
+
+    public static CustomerRequest validCustomer(String cpf) {
         return new CustomerRequest(
                 "Maria da Silva",
-                formattedCpf(),
+                cpf,
                 "maria-" + UUID.randomUUID() + "@example.com",
                 "(11) 99999-9999",
                 null,
