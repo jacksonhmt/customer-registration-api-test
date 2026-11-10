@@ -4,37 +4,43 @@ import br.com.loja.base.BaseTest;
 import br.com.loja.dto.CustomerRequest;
 import br.com.loja.factory.CustomerFactory;
 import io.restassured.response.Response;
+import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasKey;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.not;
-import static org.hamcrest.Matchers.emptyOrNullString;
-import static org.hamcrest.Matchers.notNullValue;
+import static io.restassured.module.jsv.JsonSchemaValidator.matchesJsonSchemaInClasspath;
+import static org.hamcrest.MatcherAssert.assertThat;
 
 public class CustomerContractTest extends BaseTest {
-    @Test
-    public void createCustomerReturnsExpectedContract() {
+    @Test(testName = "[customer-registration-api-test][contract] Create response matches JSON schema - Success")
+    public void createCustomerResponseMatchesJsonSchema() {
+        Response response = customerService.register(CustomerFactory.validCustomer());
+
+        Assert.assertEquals(response.statusCode(), 201, "HTTP status. Body: " + response.asString());
+        assertThat(response.asString(), matchesJsonSchemaInClasspath("json_schemas/customer-create-response.json"));
+    }
+
+    @Test(testName = "[customer-registration-api-test][contract] Duplicated customer error matches JSON schema - Conflict")
+    public void duplicatedCustomerErrorMatchesJsonSchema() {
         CustomerRequest customer = CustomerFactory.validCustomer();
+        Response first = customerService.register(customer);
+        Assert.assertEquals(first.statusCode(), 201, "First registration status. Body: " + first.asString());
 
-        Response response = customerService.register(customer);
+        Response duplicate = customerService.register(CustomerFactory.validCustomer(customer.cpf()));
 
-        response.then()
-                .statusCode(201)
-                .contentType("application/json")
-                .body("success", equalTo(true))
-                .body("message", not(emptyOrNullString()))
-                .body("data.id", instanceOf(Number.class))
-                .body("data.fullName", equalTo(customer.fullName()))
-                .body("data.email", equalTo(customer.email()))
-                .body("data.phoneNumber", instanceOf(String.class))
-                .body("data.birthDate", equalTo(customer.birthDate()))
-                .body("data.gender", equalTo(customer.gender().name()))
-                .body("data.createdAt", notNullValue())
-                .body("data.address.zipCode", instanceOf(String.class))
-                .body("data.address.street", equalTo(customer.address().street()))
-                .body("data.address.state", equalTo(customer.address().state()))
-                .body("data", not(hasKey("cpf")));
+        Assert.assertEquals(duplicate.statusCode(), 409, "HTTP status. Body: " + duplicate.asString());
+        assertThat(duplicate.asString(), matchesJsonSchemaInClasspath("json_schemas/error-response.json"));
+    }
+
+    @Test(testName = "[customer-registration-api-test][contract] Validation error matches JSON schema - Bad Request")
+    public void validationErrorMatchesJsonSchema() {
+        CustomerRequest valid = CustomerFactory.validCustomer();
+        CustomerRequest invalid = new CustomerRequest(
+                "", valid.cpf(), "not-an-email", valid.phoneNumber(), null,
+                valid.birthDate(), valid.gender(), valid.address());
+
+        Response response = customerService.register(invalid);
+
+        Assert.assertEquals(response.statusCode(), 400, "HTTP status. Body: " + response.asString());
+        assertThat(response.asString(), matchesJsonSchemaInClasspath("json_schemas/error-response.json"));
     }
 }

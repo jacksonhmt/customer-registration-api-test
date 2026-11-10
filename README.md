@@ -10,7 +10,7 @@ acceptance tests separated into `contract`, `functional`, and `smoke`.
 src/main/java/br/com/loja/
 ├── client/    # HTTP calls and property loader
 ├── dto/       # Request payloads
-├── enums/     # API enum values
+├── enums/     # API enum values and JSON schema locations
 ├── factory/   # Test data builders
 └── services/  # Business-level API operations
 
@@ -23,6 +23,28 @@ src/test/java/br/com/loja/
 ```
 
 ## API contract covered
+
+### JSON Schema validation
+
+Contract tests validate response bodies against JSON Schemas (draft-04,
+`"$schema": "http://json-schema.org/draft-04/schema#"`) stored in
+`src/main/resources/json_schemas/`, using the Rest-Assured matcher
+`matchesJsonSchemaInClasspath`:
+
+| Schema | Used for |
+|---|---|
+| `customer-create-response.json` | `201` success (`success`, `message`, `data.*`; `additionalProperties: false` also guarantees `cpf` is never exposed) |
+| `error-response.json` | `409` duplicated customer and `400` validation errors (`success`, `code`, `message`, `path`, optional `errors[]`) |
+
+```java
+assertThat(response.asString(), matchesJsonSchemaInClasspath(CUSTOMER_CREATE_RESPONSE.classpathLocation()));
+```
+
+To cover a new response, add a schema file there, register it in
+`enums/JsonSchema` and assert it in the contract test. Schemas are strict: a new
+field added by the backend must be added to the schema as well.
+
+### Response format
 
 `POST /api/v1/customers` returns `201` with:
 

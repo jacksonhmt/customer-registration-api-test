@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "API error response",
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "enum": [false]
+    },
+    "code": {
+      "type": "string",
+      "enum": [
+        "CUSTOMER_NOT_FOUND",
+        "CUSTOMER_ALREADY_EXISTS",
+        "VALIDATION_ERROR",
+        "INVALID_REQUEST",
+        "RESOURCE_NOT_FOUND",
+        "METHOD_NOT_ALLOWED",
+        "UNSUPPORTED_MEDIA_TYPE",
+        "INTERNAL_SERVER_ERROR"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["field", "message"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["success", "code", "message", "path"],
+  "additionalProperties": false
+}
